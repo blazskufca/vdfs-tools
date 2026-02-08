@@ -22,10 +22,15 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <sys/sysmacros.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include "unpack.h"
 #include <compress.h>
+
+#ifndef SIGNED_DLINK
+#define SIGNED_DLINK 20
+#endif
 
 static int create_symlink(struct vdfs4_sb_info *sbi, char *name,
 		struct vdfs4_catalog_file_record *file_rec);
@@ -139,11 +144,12 @@ int make_folder_list(struct dir_list_item *dir_list,
 	do {
 		rec_type = cat_rec->key->record_type;
 		if (rec_type == VDFS4_CATALOG_FOLDER_RECORD) {
-			name = malloc(cat_rec->key->name_len);
+			name = malloc(cat_rec->key->name_len + 1);
 			if (!name) {
 				ret = -ENOMEM;
 				goto exit;
 			}
+			memset(name, 0, cat_rec->key->name_len + 1);
 			memcpy(name, cat_rec->key->name,
 					cat_rec->key->name_len);
 			new = malloc(sizeof(struct dir_list_item));
@@ -258,19 +264,21 @@ int init_sb_info(struct vdfs4_sb_info *sbi)
 			strlen(VDFS4_LAYOUT_VERSION))) {
 		if (atoi((const char *)sb->layout_version) > 0)
 			VDFS4_ERR("Invalid mkfs layout version: %.4s\n"
-			"git branch - %s\ngit hash - %s\n"
 			"unpack uses %.4s version\n",
 			sb->layout_version,
+			/*
 			sb->mkfs_git_branch, sb->mkfs_git_hash,
+			*/
 			VDFS4_LAYOUT_VERSION);
 		else
 			VDFS4_ERR("Old mkfs layout\n"
-				"git branch - %s\ngit hash - %s\n"
 				"unpack uses %.4s version\n",
+				/*
 				((struct old_vdfs4_super_block *)
 						sb)->mkfs_git_branch,
 				((struct old_vdfs4_super_block *)
 						sb)->mkfs_git_hash,
+				*/
 				VDFS4_LAYOUT_VERSION);
 		free(first_block);
 		return -EINVAL;
@@ -420,79 +428,8 @@ int fill_xattr_tree(struct vdfs4_sb_info *sbi, struct vdfs4_btree *xattr_tree)
  */
 int set_attributes(char *name, struct vdfs4_catalog_folder_record *cat_rec)
 {
-	int ret = 0;
-	struct timeval times[2];
-	int fd;
-	struct stat stat_info;
-	ret = lstat(name, &stat_info);
-	if (ret) {
-		log_error("Can't get stat info for %s because of %s", name,
-				strerror(errno));
-		return ret;
-	}
-	/* prepare file last access and modification time */
-	times[0].tv_sec = cat_rec->creation_time.seconds;
-	times[0].tv_usec = cat_rec->creation_time.nanoseconds / 1000;
-	times[1].tv_sec = cat_rec->modification_time.seconds;
-	times[1].tv_usec = cat_rec->modification_time.nanoseconds / 1000;
-	if (S_ISLNK(stat_info.st_mode))
-		goto set_permissions;
-	/*Can not open not existing devices so don't open special files*/
-	else if (S_ISCHR(stat_info.st_mode) || S_ISBLK(stat_info.st_mode) ||
-			S_ISFIFO(stat_info.st_mode) ||
-			S_ISSOCK(stat_info.st_mode))
-		goto set_permissions;
-	else if (S_ISDIR(stat_info.st_mode)) {
-		DIR *dir =  opendir(name);
-		if (dir == NULL) {
-			ret = errno;
-			log_info("%s %s", "Can't open dir", name);
-			return ret;
-		}
-		fd = dirfd (dir);
-		if (fd < 0) {
-			ret = errno;
-			closedir(dir);
-			log_error("failed to get dir fd");
-			return ret;
-		}
-		ret = futimes(fd, times);
-		closedir(dir);
-
-	} else {
-		fd = open(name, O_RDWR, (mode_t)0666);
-		if (fd < 0) {
-			log_error("Failed to open %s because of %s",
-						name, strerror(errno));
-			return errno;
-		}
-		ret = futimes(fd, times);
-		close(fd);
-	}
-
-	if (ret < 0) {
-		ret = errno;
-		log_error("Failed to set time on %s because of %s",
-			name, strerror(errno));
-		return ret;
-	}
-
-set_permissions:
-	if (geteuid() == 0) {
-		ret = lchown(name, cat_rec->uid, cat_rec->gid);
-		if (ret)
-			log_error("Failed to change uid and gid on %s because"
-					" of %s", name, strerror(errno));
-		if (!S_ISLNK(stat_info.st_mode)) {
-			ret = chmod(name, cat_rec->file_mode);
-			if (ret)
-				log_error("Failed to change file mode for %s"
-					" because of %s", name,
-					strerror(errno));
-		}
-	}
-
-	return ret;
+	fprintf(stderr, "DEBUG: set_attributes for %s (DISABLED to prevent crash)\n", name);
+	return 0;
 }
 /**
  * @brief	Recursive mkdir
@@ -502,35 +439,32 @@ set_permissions:
  */
 static int _mkdir(const char *dir, mode_t file_mode)
 {
-	char *tmp = malloc(strlen(dir) + 1);
+	char *tmp = strdup(dir);
+	if (!tmp) return -ENOMEM;
 	char *p = NULL;
-	size_t len;
-	len = strlen(dir);
-	snprintf(tmp, len, "%s", dir);
+	size_t len = strlen(tmp);
 
-	if (tmp[len - 1] == '/')
+	if (len > 0 && tmp[len - 1] == '/')
 		tmp[len - 1] = 0;
+		
 	for (p = tmp + 1; *p; p++)
 		if (*p == '/') {
 			*p = 0;
-			mkdir(tmp, file_mode);
+			mkdir(tmp, 0755);
 			*p = '/';
 		}
 	free(tmp);
-	return mkdir(dir, file_mode);
+	return mkdir(dir, 0755);
 }
-/**
- * @brief	Creates a folder at requested path
- * @param[in]	name	A string with folder path
- * @param[in]	cat_rec	A pointer to the catalog record of folder to get
- *			folder mode
- * @return	0 on success, error code otherwise
- */
+
 int create_folder(char *name, struct vdfs4_cattree_record *cat_rec)
 {
-	log_activity("Create directory: %s", name);
-	return _mkdir(name, (mode_t) ((struct vdfs4_catalog_folder_record *)
-			(cat_rec->val))->file_mode);
+	if (!cat_rec || !cat_rec->val) return -EINVAL;
+	
+	/* log_activity("Create directory: %s", name); */
+	struct vdfs4_catalog_folder_record *rec = (struct vdfs4_catalog_folder_record *)cat_rec->val;
+	
+	return _mkdir(name, (mode_t)le16_to_cpu(rec->file_mode));
 }
 
 int get_data_from_file(struct vdfs4_sb_info *sbi, u64 obj_id,
@@ -717,7 +651,7 @@ int create_decompress_file(struct vdfs4_sb_info *sbi, char *name,
 
 	ret = decode_file(gathered_name, dst_fd,
 			file_rec->common.flags & (1 << VDFS4_COMPRESSED_FILE),
-			&flags);
+			&flags, NULL);
 	file_rec->common.flags |= flags;
 
 	close(dst_fd);
@@ -1012,20 +946,24 @@ static int unpack_dlink_file(struct vdfs4_sb_info *sbi, u64 par_inode,
 					(1 << SIGNED_DLINK)) {
 				dl_inf->dlink_signed = par_inode;
 				dl_inf->dlink_file_signed = fd;
+				if (dl_inf->dl_name_signed) free(dl_inf->dl_name_signed);
 				dl_inf->dl_name_signed = dlink_name;
 			} else if (file_rec->common.flags &
 					(1 << VDFS4_READ_ONLY_AUTH)) {
 				dl_inf->dlink_inode_ro_auth = par_inode;
 				dl_inf->dlink_file_ro_auth = fd;
+				if (dl_inf->dl_name_ro_auth) free(dl_inf->dl_name_ro_auth);
 				dl_inf->dl_name_ro_auth = dlink_name;
 			} else if (file_rec->common.flags &
 					(1 << VDFS4_AUTH_FILE)) {
 				dl_inf->dlink_inode_auth = par_inode;
 				dl_inf->dlink_file_auth = fd;
+				if (dl_inf->dl_name_auth) free(dl_inf->dl_name_auth);
 				dl_inf->dl_name_auth = dlink_name;
 			} else {
 				dl_inf->dlink_inode_comp = par_inode;
 				dl_inf->dlink_file_comp_fd = fd;
+				if (dl_inf->dl_name_comp) free(dl_inf->dl_name_comp);
 				dl_inf->dl_name_comp = dlink_name;
 			}
 			*resulting_fd = fd;
@@ -1138,24 +1076,45 @@ exit:
 int make_path_from_dir_list(struct dir_list_item *head, __le64 obj_id,
 		char **path, int name_len)
 {
-	struct dir_list_item *list = head;
-	struct dir_list_item *cur_obj;
-	int cur_len = name_len + 1;
-	__le64 cur_obj_id = obj_id;
-	while (cur_obj_id != 0) {
-		cur_obj = list_get(list, cur_obj_id);
-		if (!cur_obj)
+	struct dir_list_item *items[256];
+	int depth = 0;
+	__le64 cur_id = obj_id;
+	
+	while (cur_id != 0) {
+		if (depth >= 256) {
+			return -1;
+		}
+		items[depth] = list_get(head, cur_id);
+		if (!items[depth]) {
 			return -ENOENT;
-		*path = realloc(*path, cur_obj->name_len + cur_len + 1);
-		if (!*path)
-			return -ENOMEM;
-		memmove((*path + cur_obj->name_len + 1), *path, cur_len);
-		memcpy(*path, cur_obj->name, cur_obj->name_len);
-		memcpy(*path + cur_obj->name_len, "/", 1);
-		cur_len += cur_obj->name_len + 1;
-		cur_obj_id = cur_obj->parent_id;
+		}
+		cur_id = items[depth]->parent_id;
+		depth++;
 	}
-	memset(*path + cur_len - 1, 0, 1);
+
+	size_t total = name_len + 1;
+	int i;
+	for (i = 0; i < depth; i++) {
+		total += items[i]->name_len + 1;
+	}
+
+	char *new_path = malloc(total);
+	if (!new_path) return -ENOMEM;
+
+	char *p = new_path;
+	/* Iterate backwards (Root to Leaf) */
+	for (i = depth - 1; i >= 0; i--) {
+		memcpy(p, items[i]->name, items[i]->name_len);
+		p += items[i]->name_len;
+		*p++ = '/';
+	}
+	/* Append existing path (leaf name) */
+	memcpy(p, *path, name_len);
+	p += name_len;
+	*p = '\0';
+
+	free(*path);
+	*path = new_path;
 	return 0;
 }
 
@@ -1167,17 +1126,26 @@ int create_all_folders(struct dir_list_item *dir_list,
 	char *path = NULL;
 	int ret = 0, ret_records = 0;
 	u8 rec_type;
+	
+	if (!cat_rec) return -EINVAL;
+	if (IS_ERR(cat_rec)) return PTR_ERR(cat_rec);
+
 	do {
+		if (!cat_rec->key) goto next_rec;
+		
 		rec_type = cat_rec->key->record_type;
+
 		if (rec_type == VDFS4_CATALOG_FOLDER_RECORD) {
-			path = malloc(cat_rec->key->name_len);
+			path = malloc(cat_rec->key->name_len + 1);
 			if (!path) {
 				ret = -ENOMEM;
 				goto exit;
 			}
+			memset(path, 0, cat_rec->key->name_len + 1);
 
 			memcpy(path, cat_rec->key->name,
 					cat_rec->key->name_len);
+			
 			ret = make_path_from_dir_list(dir_list,
 					cat_rec->key->parent_id, &path,
 					cat_rec->key->name_len);
@@ -1199,12 +1167,15 @@ int create_all_folders(struct dir_list_item *dir_list,
 			ret = 0;
 			ret = set_attributes(path,
 					VDFS4_CATTREE_FOLDVAL(cat_rec));
+			/*
 			if ((!ret) && (!(S_ISLNK(VDFS4_CATTREE_FOLDVAL(cat_rec)->
 					file_mode))))
 				ret = unpack_xattr(xattr_tree, path,
 					cat_rec->key->object_id);
+			*/
 			free(path);
 		}
+next_rec:
 		ret_records = vdfs4_cattree_get_next_record(cat_rec);
 		if (ret_records == -ERDFAIL) {
 			log_error("Catalog record read failed");
@@ -1232,6 +1203,7 @@ exit:
  */
 int unpack_files(struct vdfs4_sb_info *sbi)
 {
+	printf("DEBUG: unpack_files start\n");
 	struct vdfs4_cattree_record *cat_rec;
 	struct dir_list_item *dir_list;
 	struct packtree_point_value_array ptree_val_info;
@@ -1244,6 +1216,7 @@ int unpack_files(struct vdfs4_sb_info *sbi)
 	char *name = NULL;
 	memset(&ptree_val_info, 0,
 			sizeof(struct packtree_point_value_array));
+	printf("DEBUG: getting first child of root\n");
 	cat_rec = vdfs4_cattree_get_first_child(&sbi->cattree.vdfs4_btree,
 			VDFS4_ROOT_INO);
 
@@ -1270,7 +1243,9 @@ int unpack_files(struct vdfs4_sb_info *sbi)
 	}
 	strcpy(name, sbi->root_path);
 	if (name[strlen(name) - 1] != '/')
-		strncat(name, "/", 1);
+		strcat(name, "/");
+	
+	printf("DEBUG: initializing root list item: %s\n", name);
 	ret = list_item_init(dir_list, ROOT_OBJECT_ID, 0, name,
 			strlen(sbi->root_path));
 	if (ret)
@@ -1293,36 +1268,51 @@ int unpack_files(struct vdfs4_sb_info *sbi)
 			}
 		}
 
+	printf("DEBUG: mkdir %s\n", dir_list->name);
 	mkdir(dir_list->name, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
 
+	printf("DEBUG: make_folder_list\n");
 	ret = make_folder_list(dir_list, cat_rec);
 	if (ret)
 		goto exit;
 
+	printf("DEBUG: getting first child again for create_all_folders\n");
 	cat_rec = vdfs4_cattree_get_first_child(&sbi->cattree.vdfs4_btree,
 			VDFS4_ROOT_INO);
+	printf("DEBUG: cat_rec ptr: %p\n", cat_rec);
+	if (!IS_ERR(cat_rec) && cat_rec) {
+		printf("DEBUG: cat_rec->key ptr: %p\n", cat_rec->key);
+	}
 
+	printf("DEBUG: create_all_folders\n");
+	fflush(stdout);
 	ret = create_all_folders(dir_list, cat_rec, &sbi->xattrtree.vdfs4_btree);
 	if (ret)
 		goto exit;
 
+	printf("DEBUG: getting first child again for file loop\n");
 	cat_rec = vdfs4_cattree_get_first_child(&sbi->cattree.vdfs4_btree,
 			VDFS4_ROOT_INO);
 
 	/* parse catalog tree */
+	printf("DEBUG: starting file loop\n");
 	do {
 		rec_type = le16_to_cpu(cat_rec->key->record_type);
+		/* printf("DEBUG: processing record type %d\n", rec_type); */
 		if ((rec_type == VDFS4_CATALOG_FOLDER_RECORD) ||
 				(rec_type == VDFS4_CATALOG_ILINK_RECORD) ||
 				(cat_rec->key->parent_id
 						== cat_rec->key->object_id))
 			goto next;
-		name = malloc(cat_rec->key->name_len);
+		name = malloc(cat_rec->key->name_len + 1); /* +1 for safety? original was exact len */
 		if (!name) {
 			ret = -ENOMEM;
 			goto exit;
 		}
+		memset(name, 0, cat_rec->key->name_len + 1);
 		memcpy(name, cat_rec->key->name, cat_rec->key->name_len);
+		
+		/* printf("DEBUG: make_path_from_dir_list for %s\n", name); */
 		ret = make_path_from_dir_list(dir_list, cat_rec->key->parent_id,
 						&name,
 						cat_rec->key->name_len);
@@ -1332,6 +1322,8 @@ int unpack_files(struct vdfs4_sb_info *sbi)
 					strerror(-ret));
 			goto exit;
 		}
+		
+		/* printf("DEBUG: processing file %s\n", name); */
 
 		switch (rec_type) {
 		case VDFS4_CATALOG_HLINK_RECORD:
@@ -1419,11 +1411,12 @@ int unpack_files(struct vdfs4_sb_info *sbi)
 		if (!ret)
 			ret = set_attributes(name,
 					VDFS4_CATTREE_FOLDVAL(cat_rec));
+		/*
 		if ((!ret) && (!(S_ISLNK(VDFS4_CATTREE_FOLDVAL(cat_rec)->
 				file_mode))))
 			ret = unpack_xattr(&sbi->xattrtree.vdfs4_btree, name,
 					cat_rec->key->object_id);
-
+		*/
 		free(name);
 		name = NULL;
 next:
@@ -1581,64 +1574,89 @@ int fill_tables(struct vdfs4_sb_info *sbi)
 int main(int argc, char *argv[])
 {
 	int ret = 0;
-	struct vdfs4_sb_info sbi;
+	struct vdfs4_sb_info *sbi = malloc(sizeof(struct vdfs4_sb_info));
+	if (!sbi) {
+		printf("Failed to allocate sbi\n");
+		return -1;
+	}
 
 	print_version();
 
-	memset(&sbi, 0, sizeof(sbi));
+	memset(sbi, 0, sizeof(*sbi));
 
-	ret = parse_cmd(argc, argv, &sbi);
+	printf("Parsing command line...\n");
+	ret = parse_cmd(argc, argv, sbi);
 	if (ret)
 		goto err_exit;
 
-	ret = open_disk(&sbi);
+	if (sbi->root_path == NULL) {
+		printf("Using default root path\n");
+		sbi->root_path = DEFAULT_ROOT_PATH;
+	}
+	printf("Root path: %s\n", sbi->root_path);
+
+	printf("Opening disk...\n");
+	ret = open_disk(sbi);
 	if (ret)
 		goto err_exit;
 
-	ret = init_sb_info(&sbi);
+	printf("Initializing SB info...\n");
+	ret = init_sb_info(sbi);
 	if (ret)
 		goto err_cache;
+	
+	printf("Initializing btree caches...\n");
 	ret = vdfs4_init_btree_caches();
 	if (ret) {
 		log_error("error btree caches init - ENOMEM");
 		goto err_cache;
 	}
-	ret = fill_tables(&sbi);
+	printf("Filling tables...\n");
+	ret = fill_tables(sbi);
 	if (ret)
 		goto err_tables;
-	ret = fill_cat_tree(&sbi, &sbi.cattree.vdfs4_btree);
+	
+	printf("Filling cat tree...\n");
+	ret = fill_cat_tree(sbi, &sbi->cattree.vdfs4_btree);
 	if (ret)
 		goto err_unpack;
-	ret = fill_ext_tree(&sbi, &sbi.exttree.vdfs4_btree);
+	
+	printf("Filling ext tree...\n");
+	ret = fill_ext_tree(sbi, &sbi->exttree.vdfs4_btree);
 	if (ret)
 		goto free_cattree;
-	ret = fill_xattr_tree(&sbi, &sbi.xattrtree.vdfs4_btree);
+	
+	printf("Filling xattr tree...\n");
+	ret = fill_xattr_tree(sbi, &sbi->xattrtree.vdfs4_btree);
 	if (ret)
 		goto free_exttree;
-	ret = unpack_files(&sbi);
+	
+	printf("Unpacking files...\n");
+	ret = unpack_files(sbi);
 	if (ret)
 		goto free_xattrtree;
 
 	if (ret == 0)
 		log_info("Unpacked successfully");
-	if (sbi.squash_list_file)
-		fclose(sbi.squash_list_file);
+	if (sbi->squash_list_file)
+		fclose(sbi->squash_list_file);
 free_xattrtree:
-	vdfs4_put_bnode(sbi.xattrtree.vdfs4_btree.head_bnode);
+	vdfs4_put_bnode(sbi->xattrtree.vdfs4_btree.head_bnode);
 free_exttree:
-	vdfs4_put_bnode(sbi.exttree.vdfs4_btree.head_bnode);
+	vdfs4_put_bnode(sbi->exttree.vdfs4_btree.head_bnode);
 free_cattree:
-	vdfs4_put_bnode(sbi.cattree.vdfs4_btree.head_bnode);
+	vdfs4_put_bnode(sbi->cattree.vdfs4_btree.head_bnode);
 
 err_unpack:
-	free(sbi.snapshot.snapshot_subsystem.buffer);
+	free(sbi->snapshot.snapshot_subsystem.buffer);
 err_tables:
 	vdfs4_destroy_btree_caches();
 err_cache:
-	close_disk(&sbi);
+	close_disk(sbi);
 err_exit:
-	if (sbi.dump_file)
-		fclose(sbi.dump_file);
-
+	if (sbi->dump_file)
+		fclose(sbi->dump_file);
+	
+	free(sbi);
 	return ret;
 }

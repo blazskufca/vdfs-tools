@@ -561,10 +561,11 @@ struct vdfs4_meta_block {
 #define VDFS4_CATALOG_HLINK_RECORD		0x03
 /* UNUSED:								0x04 */
 #define VDFS4_CATALOG_ILINK_RECORD		0x05
+#define VDFS4_CATALOG_DLINK_RECORD		0x06
 #define VDFS4_CATALOG_UNPACK_INODE		0x10
 
 /**
- * @brief	On-disk structure to hold generic for all the trees.
+ * @brief	On-disk structure to hold file and folder records.
  */
 struct vdfs4_generic_key {
 	/** Unique number that identifies structure */
@@ -633,6 +634,17 @@ struct vdfs4_catalog_folder_record {
 	struct vdfs4_timespec	modification_time;
 	/** Record last access time */
 	struct vdfs4_timespec	access_time;
+};
+
+/**
+ * @brief	On-disk structure to hold dlink records.
+ */
+struct vdfs4_catalog_dlink_record {
+	/** Common part of record */
+	struct vdfs4_catalog_folder_record common;
+	__le64 data_inode;
+	__le64 data_offset;
+	__le64 data_length;
 };
 
 /**

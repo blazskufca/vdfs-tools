@@ -452,6 +452,28 @@ struct vdfs4_sb_info {
 	/* Profiling data (vdfs-squeeze) */
 	char *profiling_data_path;
 	struct list_head prof_data;
+	
+	struct vdfs4_dlink_info {
+		u64 dlink_inode_comp;
+		int dlink_file_comp_fd;
+		char *dl_name_comp;
+
+		u64 dlink_inode_auth;
+		int dlink_file_auth;
+		char *dl_name_auth;
+
+		u64 dlink_inode_ro_auth;
+		int dlink_file_ro_auth;
+		char *dl_name_ro_auth;
+
+		u64 dlink_signed;
+		int dlink_file_signed;
+		char *dl_name_signed;
+
+		int dlink_count;
+		int dlink_file_fd;
+		char *dl_name;
+	} dl_inf;
 };
 
 struct profiled_file {
