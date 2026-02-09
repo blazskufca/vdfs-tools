@@ -128,7 +128,14 @@ btrtst: CFLAGS += -DCONFIG_VDFS4_DEBUG_TOOLS_GET_BNODE
 all: mkfs unpack tune fsck info
 
 openssl: $(OPENSSL_PACK)
-	@if [ ! -d $(OPENSSL_DIR) ]; then tar -xf $(OPENSSL_PACK) -C $(OPENSSL_BASE); cd $(OPENSSL_DIR); ./Configure no-shared no-asm linux-elf --cross-compile-prefix=$(CROSS_COMPILE) $(SECURE_CFLAGS); make build_crypto; fi
+	@if [ ! -d $(OPENSSL_DIR) ]; then \
+		tar -xf $(OPENSSL_PACK) -C $(OPENSSL_BASE); \
+		cd $(OPENSSL_DIR); \
+		./Configure no-shared no-asm linux-elf --cross-compile-prefix=$(CROSS_COMPILE) $(SECURE_CFLAGS) && \
+		sed -i 's/defined(linux) && !defined(TERMIO)/& \&\& !defined(TERMIOS)/' crypto/ui/ui_openssl.c && \
+		sed -i 's/-DTERMIO/-DTERMIOS -fPIC/' Makefile && \
+		make build_crypto || { echo "OpenSSL build failed"; cd ../..; rm -rf $(OPENSSL_DIR); exit 1; }; \
+	fi
 
 zlib: $(ZLIB_ARCH)
 	@if [ ! -d $(ZLIB_DIR) ]; then tar -xf $(ZLIB_ARCH) -C $(ZLIB_BASE); cd $(ZLIB_DIR); env CC=$(CROSS_COMPILE)gcc CFLAGS="$(SECURE_CFLAGS)" ./configure; make; fi
