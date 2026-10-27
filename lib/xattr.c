@@ -889,6 +889,12 @@ int unpack_xattr(struct vdfs4_btree *xattr_tree, char *path, u64 object_id)
 		memcpy(name, record->key->name, record->key->name_len);
 		if (setxattr(path, name, (void *)(record->val + 1),
 			     (size_t)(*(unsigned char *)record->val), 0)) {
+			/* security.* needs privileges; not fatal for unpack */
+			if (errno == EPERM || errno == ENOTSUP) {
+				log_warning("skipping xattr %s for file %s",
+					    name, path);
+				goto next;
+			}
 			log_error("cannot set xattr %s for file %s"
 				  " (err:%d)\n",
 				  record->key->name, path,
@@ -896,6 +902,7 @@ int unpack_xattr(struct vdfs4_btree *xattr_tree, char *path, u64 object_id)
 			ret = -errno;
 			goto exit;
 		}
+next:
 		ret = xattrtree_get_next_record(record);
 		if (ret) {
 			if (ret == -ENOENT)

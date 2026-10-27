@@ -181,6 +181,8 @@ extern unsigned int cattree_prealloc;
 #define VDFS4_READ_ONLY_AUTH	16
 #define VDFS4_ENCRYPTED_FILE	17
 #define VDFS4_PROFILED_FILE	18
+/* data stored in data_fork.extents instead of blocks (seen in 2026 images) */
+#define VDFS4_INLINE_FILE	19
 
 /* below flags are only used at mkfs runtime
  * and aren't written on partition layout */

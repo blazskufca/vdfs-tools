@@ -568,6 +568,20 @@ int create_file(struct vdfs4_sb_info *sbi, u64 object_id, char *name,
 		return -ENFILE;
 	}
 
+	if (file_rec->common.flags & (1 << VDFS4_INLINE_FILE)) {
+		size_in_bytes = file_rec->data_fork.size_in_bytes;
+		if (size_in_bytes > sizeof(file_rec->data_fork.extents)) {
+			log_error("Inline file %s too big (%llu)", name,
+					(unsigned long long)size_in_bytes);
+			close(fd);
+			return -EINVAL;
+		}
+		ret_write = write(fd, file_rec->data_fork.extents,
+				size_in_bytes);
+		close(fd);
+		return ret_write == (ssize_t)size_in_bytes ? 0 : -EWRFAIL;
+	}
+
 	block_buffer = malloc(sbi->block_size);
 	if (block_buffer == NULL) {
 		log_error("Can't allocate buffer to read file");
@@ -792,6 +806,23 @@ int create_symlink(struct vdfs4_sb_info *sbi, char *name,
 	int ret = 0;
 
 	log_activity("Create symlink: %s", name);
+	if (file_rec->common.flags & (1 << VDFS4_INLINE_FILE)) {
+		char target[sizeof(file_rec->data_fork.extents) + 1];
+
+		length = file_rec->data_fork.size_in_bytes;
+		if (length >= sizeof(target)) {
+			log_error("Inline symlink %s too long", name);
+			return -EINVAL;
+		}
+		memcpy(target, file_rec->data_fork.extents, length);
+		target[length] = '\0';
+		if (symlink(target, name)) {
+			log_error("Failed to create symlink %s - %s", name,
+					strerror(errno));
+			return -EINVAL;
+		}
+		return 0;
+	}
 	iextent = &file_rec->data_fork.extents[0];
 	length = iextent->extent.length;
 	offset = iextent->extent.begin;
@@ -838,8 +869,8 @@ int create_spec_file(char *name, struct vdfs4_cattree_record *cat_rec)
 	int major = dev_kernel >> 20;
 	dev_t dev = makedev(major, minor);
 	if (geteuid() != 0) {
-		log_warning("You must be root to create special file %s", name);
-		return -EPERM;
+		log_warning("Not root, skipping special file %s", name);
+		return 0;
 	}
 	/*TODO: set major/minor numbers to dev */
 	log_info("Create spec file: %s", name);
@@ -1522,10 +1553,13 @@ int fill_tables(struct vdfs4_sb_info *sbi)
 	}
 	sbi->snapshot.base_table = base_t;
 	ext_t = (struct vdfs4_extended_table *)(
-			(char *)base_t + (char)DIV_ROUND_UP(le32_to_cpu(
+			(char *)base_t + DIV_ROUND_UP(le32_to_cpu(
 			base_t->descriptor.checksum_offset + CRC32_SIZE),
 			512) * 512);
 	for (ext_count = 0; ext_count < VDFS4_SNAPSHOT_EXT_TABLES; ext_count++) {
+		if ((char *)ext_t + sizeof(*ext_t) >
+				buf + sbi->snapshot.snapshot_subsystem.buffer_size)
+			break;
 		if (memcmp(ext_t->descriptor.signature,
 				VDFS4_SNAPSHOT_EXTENDED_TABLE, 4))
 			break;
@@ -1558,7 +1592,7 @@ int fill_tables(struct vdfs4_sb_info *sbi)
 		} else
 			break;
 		ext_t = (struct vdfs4_extended_table *)(
-				(char *)ext_t + (char)DIV_ROUND_UP(le32_to_cpu(
+				(char *)ext_t + DIV_ROUND_UP(le32_to_cpu(
 				ext_t->descriptor.checksum_offset + CRC32_SIZE),
 				512) * 512);
 	}
